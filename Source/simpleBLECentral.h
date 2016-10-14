@@ -66,7 +66,8 @@ extern "C"
 // Simple BLE Central Task Events
 #define START_DEVICE_EVT                              0x0001
 #define START_DISCOVERY_EVT                           0x0002
-
+#define RX_TIME_OUT_EVT                               0x0004
+  
 /*********************************************************************
  * MACROS
  */

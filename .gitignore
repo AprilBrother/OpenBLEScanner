@@ -1,1 +1,7 @@
 *.swp
+settings
+*.dep
+ExE
+Obj
+List
+CC2540EM

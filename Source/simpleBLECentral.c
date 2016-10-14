@@ -66,6 +66,7 @@
 #include "gapbondmgr.h"
 #include "simpleGATTprofile.h"
 #include "simpleBLECentral.h"
+#include "npi.h"
 
 /*********************************************************************
  * MACROS
@@ -236,6 +237,10 @@ static bool simpleBLEFindSvcUuid( uint16 uuid, uint8 *pData, uint8 dataLen );
 static void simpleBLEAddDeviceInfo( uint8 *pAddr, uint8 addrType );
 char *bdAddr2Str ( uint8 *pAddr );
 
+static void uartInitTransport( npiCBack_t npiCBack );
+static void dataHandler( uint8 port, uint8 events );
+static void startScan();
+
 /*********************************************************************
  * PROFILE CALLBACKS
  */
@@ -314,6 +319,12 @@ void SimpleBLECentral_Init( uint8 task_id )
   // Register for all key events - This app will handle all key events
   RegisterForKeys( simpleBLETaskId );
   
+  uartInitTransport(dataHandler);
+    
+  P2SEL = 0; // Configure Port 2 as GPIO
+  P2DIR = 0x1F; // All port 1 pins (P2.0-P2.4) as output
+  //P2 = 0;   // All pins on port 2 to low
+
   // makes sure LEDs are off
   HalLedSet( (HAL_LED_1 | HAL_LED_2), HAL_LED_MODE_OFF );
   
@@ -362,6 +373,7 @@ uint16 SimpleBLECentral_ProcessEvent( uint8 task_id, uint16 events )
 
     // Register with bond manager after starting device
     GAPBondMgr_Register( (gapBondCBs_t *) &simpleBLEBondCB );
+    startScan();
 
     return ( events ^ START_DEVICE_EVT );
   }
@@ -371,6 +383,29 @@ uint16 SimpleBLECentral_ProcessEvent( uint8 task_id, uint16 events )
     simpleBLECentralStartDiscovery( );
     
     return ( events ^ START_DISCOVERY_EVT );
+  }
+  
+  if ( events & RX_TIME_OUT_EVT ) {
+    uint8 data[64];
+    uint8 send;
+    
+    while(rxLen != 0) {
+      
+      send = rxLen;
+      rxLen = 0;
+      
+      for(uint8 i = 0; i < send; i++) {
+        data[i] = rxBuf[rxTail];
+        rxTail++;
+        if(rxTail == MAX_RX_LEN) {
+          rxTail = 0;
+        }
+      }
+      
+      processAtCmd(data, send);
+    }
+
+    return (events ^ RX_TIME_OUT_EVT);
   }
   
   // Discard unknown events
@@ -1049,6 +1084,89 @@ char *bdAddr2Str( uint8 *pAddr )
   *pStr = 0;
   
   return str;
+}
+
+static void startScan() {
+  // Start or stop discovery
+  if ( simpleBLEState != BLE_STATE_CONNECTED ) {
+    if ( !simpleBLEScanning )
+    {
+      simpleBLEScanning = TRUE;
+      uint8 isActive = 1;
+      uint8 ret = GAPCentralRole_StartDiscovery( DEFAULT_DISCOVERY_MODE,
+                                     isActive,
+                                     DEFAULT_DISCOVERY_WHITE_LIST );
+    } 
+  }
+  
+  NPI_WriteTransport("Start scan.", 5);
+
+}
+
+static void uartInitTransport( npiCBack_t npiCBack )
+{
+  halUARTCfg_t uartConfig;
+
+  // configure UART
+  uartConfig.configured           = TRUE;
+  uartConfig.baudRate             = NPI_UART_BR;
+  uartConfig.flowControl          = NPI_UART_FC;
+  uartConfig.flowControlThreshold = NPI_UART_FC_THRESHOLD;
+  uartConfig.rx.maxBufSize        = NPI_UART_RX_BUF_SIZE;
+  uartConfig.tx.maxBufSize        = NPI_UART_TX_BUF_SIZE;
+  uartConfig.idleTimeout          = NPI_UART_IDLE_TIMEOUT;
+  uartConfig.intEnable            = NPI_UART_INT_ENABLE;
+  uartConfig.callBackFunc         = (halUARTCBack_t)npiCBack;
+
+  uartConfig.baudRate = HAL_UART_BR_115200;
+  
+  // start UART
+  // Note: Assumes no issue opening UART port.
+  (void)HalUARTOpen( NPI_UART_PORT, &uartConfig );
+}
+
+
+/*********************************************************************
+ * @fn      dataHandler
+ *
+ * @brief   Callback from UART indicating a data coming
+ *
+ * @param   port - data port.
+ *
+ * @param   events - type of data.
+ *
+ * @return  none
+ */
+static void dataHandler( uint8 port, uint8 events )
+{  
+  if((events & HAL_UART_RX_TIMEOUT) == HAL_UART_RX_TIMEOUT)
+  {
+    osal_stop_timerEx(simpleBLETaskId, RX_TIME_OUT_EVT);
+    
+    uint8 len = NPI_RxBufLen();
+    uint8 buf[128];
+    NPI_ReadTransport( buf, len );
+    
+    uint8 copy;   
+    if(len > (MAX_RX_LEN - rxLen)) {
+      rxLen = MAX_RX_LEN;
+      copy = MAX_RX_LEN - rxLen;
+    } else {
+      rxLen += len;
+      copy = len;
+    }
+    
+    for(uint8 i = 0; i < copy; i++) {
+      rxBuf[rxHead] = buf[i];
+      rxHead++;
+      if(rxHead == MAX_RX_LEN) {
+        rxHead = 0;
+      }
+    }
+    
+    osal_start_timerEx(simpleBLETaskId, RX_TIME_OUT_EVT, SBP_RX_TIME_OUT);
+  }
+  return;
 }
 
 /*********************************************************************
