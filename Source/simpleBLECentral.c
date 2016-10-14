@@ -139,6 +139,8 @@
 // TRUE to filter discovery results on desired service UUID
 #define DEFAULT_DEV_DISC_BY_SVC_UUID          TRUE
 
+#define MAX_RX_LEN                            128
+
 // Application states
 enum
 {
@@ -219,6 +221,11 @@ static bool simpleBLEDoWrite = FALSE;
 
 // GATT read/write procedure state
 static bool simpleBLEProcedureInProgress = FALSE;
+
+static uint8 rxBuf[MAX_RX_LEN];
+static uint8 rxLen = 0;
+static uint8 rxHead = 0, rxTail = 0;
+
 
 /*********************************************************************
  * LOCAL FUNCTIONS
@@ -402,7 +409,7 @@ uint16 SimpleBLECentral_ProcessEvent( uint8 task_id, uint16 events )
         }
       }
       
-      processAtCmd(data, send);
+      //processAtCmd(data, send);
     }
 
     return (events ^ RX_TIME_OUT_EVT);
@@ -755,31 +762,7 @@ static uint8 simpleBLECentralEventCB( gapCentralRoleEvent_t *pEvent )
 
     case GAP_LINK_ESTABLISHED_EVENT:
       {
-        if ( pEvent->gap.hdr.status == SUCCESS )
-        {          
-          simpleBLEState = BLE_STATE_CONNECTED;
-          simpleBLEConnHandle = pEvent->linkCmpl.connectionHandle;
-          simpleBLEProcedureInProgress = TRUE;    
-
-          // If service discovery not performed initiate service discovery
-          if ( simpleBLECharHdl == 0 )
-          {
-            osal_start_timerEx( simpleBLETaskId, START_DISCOVERY_EVT, DEFAULT_SVC_DISCOVERY_DELAY );
-          }
-                    
-          LCD_WRITE_STRING( "Connected", HAL_LCD_LINE_1 );
-          LCD_WRITE_STRING( bdAddr2Str( pEvent->linkCmpl.devAddr ), HAL_LCD_LINE_2 );   
-        }
-        else
-        {
-          simpleBLEState = BLE_STATE_IDLE;
-          simpleBLEConnHandle = GAP_CONNHANDLE_INIT;
-          simpleBLERssi = FALSE;
-          simpleBLEDiscState = BLE_DISC_STATE_IDLE;
-          
-          LCD_WRITE_STRING( "Connect Failed", HAL_LCD_LINE_1 );
-          LCD_WRITE_STRING_VALUE( "Reason:", pEvent->gap.hdr.status, 10, HAL_LCD_LINE_2 );
-        }
+        //
       }
       break;
 
@@ -1164,7 +1147,7 @@ static void dataHandler( uint8 port, uint8 events )
       }
     }
     
-    osal_start_timerEx(simpleBLETaskId, RX_TIME_OUT_EVT, SBP_RX_TIME_OUT);
+    osal_start_timerEx(simpleBLETaskId, RX_TIME_OUT_EVT, 5);
   }
   return;
 }
