@@ -67,6 +67,9 @@
 #include "simpleGATTprofile.h"
 #include "simpleBLECentral.h"
 #include "npi.h"
+#include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 /*********************************************************************
  * MACROS
@@ -80,7 +83,7 @@
  */
 
 // Maximum number of scan responses
-#define DEFAULT_MAX_SCAN_RES                  8
+#define DEFAULT_MAX_SCAN_RES                  30
 
 // Scan duration in ms
 #define DEFAULT_SCAN_DURATION                 4000
@@ -386,6 +389,7 @@ uint16 SimpleBLECentral_ProcessEvent( uint8 task_id, uint16 events )
   }
   
   if ( events & RX_TIME_OUT_EVT ) {
+
     uint8 data[64];
     uint8 send;
     
@@ -672,6 +676,7 @@ static uint8 simpleBLECentralEventCB( gapCentralRoleEvent_t *pEvent )
       
     case GAP_DEVICE_DISCOVERY_EVENT:
       {
+          simpleBLEScanning = FALSE;
           startScan();
       }
       break;
@@ -888,28 +893,67 @@ static void dataHandler( uint8 port, uint8 events )
 }
 
 static void parseAdvData(gapDeviceInfoEvent_t *deviceInfo) {
-  uint8 *advertData = deviceInfo->pEvtData;
-  
-  // Is iBeacon?
-  if ( !((advertData[5] == 0x4c) &&
+  char response[80] = "OK+SCAN:";
+
+    char *tmp = bdAddr2Str(deviceInfo->addr);
+    strcat(response, &tmp[2]);
+    uint8 *advertData = deviceInfo->pEvtData;
+    
+    if ( (advertData[5] == 0x4c) &&
       (advertData[6] == 0x00) &&
       (advertData[7] == 0x02) &&
-      (advertData[8] == 0x15)) ) {
-      return;
-  }
-  
-  uint8 response[RESP_LEN] = "OK+SCAN:";
-  osal_memcpy(response + OFFSET_MAC, deviceInfo->addr, B_ADDR_LEN);
-  response[OFFSET_BATTERY] = 0xff;
-  osal_memcpy(response + OFFSET_UUID, advertData + 9, 21);
-  if (deviceInfo->dataLen == 31) {
-    response[OFFSET_BATTERY] = advertData[30];
-  }
-  response[OFFSET_RSSI] = deviceInfo->rssi;
-  response[OFFSET_END] = '\r';
-  response[OFFSET_END + 1] = '\n';
-  
-  NPI_WriteTransport(response, sizeof(response));
+      (advertData[8] == 0x15) ) {
+      // yes!  This is an iBeacon		
+ 
+      strcat(response, ",");
+     
+      char tmp[2] = "";
+      for(uint8 i = 0; i < 16; i++) {
+        _ltoa(advertData[9 + i], (uint8 *)tmp, 16);
+        if(strlen((char *)tmp) < 2) {
+          strcat(response, "0");
+        }
+        strcat(response, tmp);
+      }
+        
+      strcat(response, ",");
+      
+      uint16 major = advertData[25] << 8 | advertData[26];
+      uint8 majorStr[6] = "0";
+      _itoa(major, majorStr, 10);
+      strcat(response, (char *)majorStr);
+      
+      strcat(response, ",");
+      
+      uint16 minor = advertData[27] << 8 | advertData[28];
+      uint8 minorStr[6] = "0";
+      _itoa(minor, minorStr, 10);
+      strcat(response, (char *)minorStr);
+
+      strcat(response, ",");
+
+      char measured_power[5] = "0";
+      sprintf(measured_power, "%d", advertData[29] - 256);
+      strcat(response, measured_power);
+    } 
+    
+    strcat(response, ",");
+
+    char rssi[4] = "";
+    sprintf(rssi, "%d", deviceInfo->rssi);
+    strcat(response, rssi);
+
+    if (deviceInfo->dataLen == 31) {
+      strcat(response, ",");
+    
+      char battery[3] = "";
+      sprintf(battery, "%d", advertData[30]);
+      strcat(response, battery);
+    }
+
+    strcat(response, "\r\n");
+      
+    NPI_WriteTransport((uint8 *)response, strlen(response));
 }
 
 /*********************************************************************
