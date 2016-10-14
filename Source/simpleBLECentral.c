@@ -203,13 +203,6 @@ static uint16 simpleBLEConnHandle = GAP_CONNHANDLE_INIT;
 // Application state
 static uint8 simpleBLEState = BLE_STATE_IDLE;
 
-// Discovery state
-static uint8 simpleBLEDiscState = BLE_DISC_STATE_IDLE;
-
-// Discovered service start and end handle
-static uint16 simpleBLESvcStartHdl = 0;
-static uint16 simpleBLESvcEndHdl = 0;
-
 // Discovered characteristic handle
 static uint16 simpleBLECharHdl = 0;
 
@@ -238,7 +231,6 @@ static void simpleBLECentralPasscodeCB( uint8 *deviceAddr, uint16 connectionHand
 static void simpleBLECentralPairStateCB( uint16 connHandle, uint8 state, uint8 status );
 static void simpleBLECentral_HandleKeys( uint8 shift, uint8 keys );
 static void simpleBLECentral_ProcessOSALMsg( osal_event_hdr_t *pMsg );
-static void simpleBLEGATTDiscoveryEvent( gattMsgEvent_t *pMsg );
 static void simpleBLECentralStartDiscovery( void );
 static bool simpleBLEFindSvcUuid( uint16 uuid, uint8 *pData, uint8 dataLen );
 static void simpleBLEAddDeviceInfo( uint8 *pAddr, uint8 addrType );
@@ -634,53 +626,6 @@ static void simpleBLECentralProcessGATTMsg( gattMsgEvent_t *pMsg )
     // ignore the message
     return;
   }
-  
-  if ( ( pMsg->method == ATT_READ_RSP ) ||
-       ( ( pMsg->method == ATT_ERROR_RSP ) &&
-         ( pMsg->msg.errorRsp.reqOpcode == ATT_READ_REQ ) ) )
-  {
-    if ( pMsg->method == ATT_ERROR_RSP )
-    {
-      uint8 status = pMsg->msg.errorRsp.errCode;
-      
-      LCD_WRITE_STRING_VALUE( "Read Error", status, 10, HAL_LCD_LINE_1 );
-    }
-    else
-    {
-      // After a successful read, display the read value
-      uint8 valueRead = pMsg->msg.readRsp.pValue[0];
-
-      LCD_WRITE_STRING_VALUE( "Read rsp:", valueRead, 10, HAL_LCD_LINE_1 );
-    }
-    
-    simpleBLEProcedureInProgress = FALSE;
-  }
-  else if ( ( pMsg->method == ATT_WRITE_RSP ) ||
-       ( ( pMsg->method == ATT_ERROR_RSP ) &&
-         ( pMsg->msg.errorRsp.reqOpcode == ATT_WRITE_REQ ) ) )
-  {
-    
-    if ( pMsg->method == ATT_ERROR_RSP == ATT_ERROR_RSP )
-    {
-      uint8 status = pMsg->msg.errorRsp.errCode;
-      
-      LCD_WRITE_STRING_VALUE( "Write Error", status, 10, HAL_LCD_LINE_1 );
-    }
-    else
-    {
-      // After a succesful write, display the value that was written and increment value
-      LCD_WRITE_STRING_VALUE( "Write sent:", simpleBLECharVal++, 10, HAL_LCD_LINE_1 );      
-    }
-    
-    simpleBLEProcedureInProgress = FALSE;    
-
-  }
-  else if ( simpleBLEDiscState != BLE_DISC_STATE_IDLE )
-  {
-    simpleBLEGATTDiscoveryEvent( pMsg );
-  }
-  
-  GATT_bm_free( &pMsg->msg, pMsg->method );
 }
 
 /*********************************************************************
@@ -771,7 +716,6 @@ static uint8 simpleBLECentralEventCB( gapCentralRoleEvent_t *pEvent )
         simpleBLEState = BLE_STATE_IDLE;
         simpleBLEConnHandle = GAP_CONNHANDLE_INIT;
         simpleBLERssi = FALSE;
-        simpleBLEDiscState = BLE_DISC_STATE_IDLE;
         simpleBLECharHdl = 0;
         simpleBLEProcedureInProgress = FALSE;
           
@@ -867,81 +811,8 @@ static void simpleBLECentralPasscodeCB( uint8 *deviceAddr, uint16 connectionHand
  */
 static void simpleBLECentralStartDiscovery( void )
 {
-  uint8 uuid[ATT_BT_UUID_SIZE] = { LO_UINT16(SIMPLEPROFILE_SERV_UUID),
-                                   HI_UINT16(SIMPLEPROFILE_SERV_UUID) };
-  
-  // Initialize cached handles
-  simpleBLESvcStartHdl = simpleBLESvcEndHdl = simpleBLECharHdl = 0;
 
-  simpleBLEDiscState = BLE_DISC_STATE_SVC;
-  
-  // Discovery simple BLE service
-  GATT_DiscPrimaryServiceByUUID( simpleBLEConnHandle,
-                                 uuid,
-                                 ATT_BT_UUID_SIZE,
-                                 simpleBLETaskId );
 }
-
-/*********************************************************************
- * @fn      simpleBLEGATTDiscoveryEvent
- *
- * @brief   Process GATT discovery event
- *
- * @return  none
- */
-static void simpleBLEGATTDiscoveryEvent( gattMsgEvent_t *pMsg )
-{
-  attReadByTypeReq_t req;
-  
-  if ( simpleBLEDiscState == BLE_DISC_STATE_SVC )
-  {
-    // Service found, store handles
-    if ( pMsg->method == ATT_FIND_BY_TYPE_VALUE_RSP &&
-         pMsg->msg.findByTypeValueRsp.numInfo > 0 )
-    {
-      simpleBLESvcStartHdl = ATT_ATTR_HANDLE(pMsg->msg.findByTypeValueRsp.pHandlesInfo, 0);
-      simpleBLESvcEndHdl = ATT_GRP_END_HANDLE(pMsg->msg.findByTypeValueRsp.pHandlesInfo, 0);
-    }
-    
-    // If procedure complete
-    if ( ( pMsg->method == ATT_FIND_BY_TYPE_VALUE_RSP  && 
-           pMsg->hdr.status == bleProcedureComplete ) ||
-         ( pMsg->method == ATT_ERROR_RSP ) )
-    {
-      if ( simpleBLESvcStartHdl != 0 )
-      {
-        // Discover characteristic
-        simpleBLEDiscState = BLE_DISC_STATE_CHAR;
-        
-        req.startHandle = simpleBLESvcStartHdl;
-        req.endHandle = simpleBLESvcEndHdl;
-        req.type.len = ATT_BT_UUID_SIZE;
-        req.type.uuid[0] = LO_UINT16(SIMPLEPROFILE_CHAR1_UUID);
-        req.type.uuid[1] = HI_UINT16(SIMPLEPROFILE_CHAR1_UUID);
-
-        GATT_ReadUsingCharUUID( simpleBLEConnHandle, &req, simpleBLETaskId );
-      }
-    }
-  }
-  else if ( simpleBLEDiscState == BLE_DISC_STATE_CHAR )
-  {
-    // Characteristic found, store handle
-    if ( pMsg->method == ATT_READ_BY_TYPE_RSP && 
-         pMsg->msg.readByTypeRsp.numPairs > 0 )
-    {
-      simpleBLECharHdl = BUILD_UINT16(pMsg->msg.readByTypeRsp.pDataList[0],
-                                      pMsg->msg.readByTypeRsp.pDataList[1]);
-      
-      LCD_WRITE_STRING( "Simple Svc Found", HAL_LCD_LINE_1 );
-      simpleBLEProcedureInProgress = FALSE;
-    }
-    
-    simpleBLEDiscState = BLE_DISC_STATE_IDLE;
-
-    
-  }    
-}
-
 
 /*********************************************************************
  * @fn      simpleBLEFindSvcUuid
