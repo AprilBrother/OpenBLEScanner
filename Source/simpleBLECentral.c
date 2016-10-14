@@ -140,6 +140,16 @@
 #define DEFAULT_DEV_DISC_BY_SVC_UUID          TRUE
 
 #define MAX_RX_LEN                            128
+#define RESP_LEN                              39
+
+#define OFFSET_MAC                            (8)
+#define OFFSET_UUID                           14
+#define OFFSET_MAJOR                          30
+#define OFFSET_MINOR                          32
+#define OFFSET_MEASURED_POWER                 34
+#define OFFSET_BATTERY                        35
+#define OFFSET_RSSI                           36
+#define OFFSET_END                            37
 
 // Application states
 enum
@@ -231,14 +241,12 @@ static void simpleBLECentralPasscodeCB( uint8 *deviceAddr, uint16 connectionHand
 static void simpleBLECentralPairStateCB( uint16 connHandle, uint8 state, uint8 status );
 static void simpleBLECentral_HandleKeys( uint8 shift, uint8 keys );
 static void simpleBLECentral_ProcessOSALMsg( osal_event_hdr_t *pMsg );
-static void simpleBLECentralStartDiscovery( void );
-static bool simpleBLEFindSvcUuid( uint16 uuid, uint8 *pData, uint8 dataLen );
-static void simpleBLEAddDeviceInfo( uint8 *pAddr, uint8 addrType );
 char *bdAddr2Str ( uint8 *pAddr );
 
 static void uartInitTransport( npiCBack_t npiCBack );
 static void dataHandler( uint8 port, uint8 events );
 static void startScan();
+static void parseAdvData(gapDeviceInfoEvent_t *deviceInfo);
 
 /*********************************************************************
  * PROFILE CALLBACKS
@@ -375,13 +383,6 @@ uint16 SimpleBLECentral_ProcessEvent( uint8 task_id, uint16 events )
     startScan();
 
     return ( events ^ START_DEVICE_EVT );
-  }
-
-  if ( events & START_DISCOVERY_EVT )
-  {
-    simpleBLECentralStartDiscovery( );
-    
-    return ( events ^ START_DISCOVERY_EVT );
   }
   
   if ( events & RX_TIME_OUT_EVT ) {
@@ -665,43 +666,13 @@ static uint8 simpleBLECentralEventCB( gapCentralRoleEvent_t *pEvent )
 
     case GAP_DEVICE_INFO_EVENT:
       {
-        // if filtering device discovery results based on service UUID
-        if ( DEFAULT_DEV_DISC_BY_SVC_UUID == TRUE )
-        {
-          if ( simpleBLEFindSvcUuid( SIMPLEPROFILE_SERV_UUID,
-                                     pEvent->deviceInfo.pEvtData,
-                                     pEvent->deviceInfo.dataLen ) )
-          {
-            simpleBLEAddDeviceInfo( pEvent->deviceInfo.addr, pEvent->deviceInfo.addrType );
-          }
-        }
+        parseAdvData(&(pEvent->deviceInfo));  
       }
       break;
       
     case GAP_DEVICE_DISCOVERY_EVENT:
       {
-        // discovery complete
-        simpleBLEScanning = FALSE;
-
-        // if not filtering device discovery results based on service UUID
-        if ( DEFAULT_DEV_DISC_BY_SVC_UUID == FALSE )
-        {
-          // Copy results
-          simpleBLEScanRes = pEvent->discCmpl.numDevs;
-          osal_memcpy( simpleBLEDevList, pEvent->discCmpl.pDevList,
-                       (sizeof( gapDevRec_t ) * pEvent->discCmpl.numDevs) );
-        }
-        
-        LCD_WRITE_STRING_VALUE( "Devices Found", simpleBLEScanRes,
-                                10, HAL_LCD_LINE_1 );
-        if ( simpleBLEScanRes > 0 )
-        {
-          LCD_WRITE_STRING( "<- To Select", HAL_LCD_LINE_2 );
-        }
-
-        // initialize scan index to last device
-        simpleBLEScanIdx = simpleBLEScanRes;
-
+          startScan();
       }
       break;
 
@@ -800,113 +771,6 @@ static void simpleBLECentralPasscodeCB( uint8 *deviceAddr, uint16 connectionHand
   // Send passcode response
   GAPBondMgr_PasscodeRsp( connectionHandle, SUCCESS, passcode );
 #endif
-}
-
-/*********************************************************************
- * @fn      simpleBLECentralStartDiscovery
- *
- * @brief   Start service discovery.
- *
- * @return  none
- */
-static void simpleBLECentralStartDiscovery( void )
-{
-
-}
-
-/*********************************************************************
- * @fn      simpleBLEFindSvcUuid
- *
- * @brief   Find a given UUID in an advertiser's service UUID list.
- *
- * @return  TRUE if service UUID found
- */
-static bool simpleBLEFindSvcUuid( uint16 uuid, uint8 *pData, uint8 dataLen )
-{
-  uint8 adLen;
-  uint8 adType;
-  uint8 *pEnd;
-  
-  pEnd = pData + dataLen - 1;
-  
-  // While end of data not reached
-  while ( pData < pEnd )
-  {
-    // Get length of next AD item
-    adLen = *pData++;
-    if ( adLen > 0 )
-    {
-      adType = *pData;
-      
-      // If AD type is for 16-bit service UUID
-      if ( adType == GAP_ADTYPE_16BIT_MORE || adType == GAP_ADTYPE_16BIT_COMPLETE )
-      {
-        pData++;
-        adLen--;
-        
-        // For each UUID in list
-        while ( adLen >= 2 && pData < pEnd )
-        {
-          // Check for match
-          if ( pData[0] == LO_UINT16(uuid) && pData[1] == HI_UINT16(uuid) )
-          {
-            // Match found
-            return TRUE;
-          }
-          
-          // Go to next
-          pData += 2;
-          adLen -= 2;
-        }
-        
-        // Handle possible erroneous extra byte in UUID list
-        if ( adLen == 1 )
-        {
-          pData++;
-        }
-      }
-      else
-      {
-        // Go to next item
-        pData += adLen;
-      }
-    }
-  }
-  
-  // Match not found
-  return FALSE;
-}
-
-/*********************************************************************
- * @fn      simpleBLEAddDeviceInfo
- *
- * @brief   Add a device to the device discovery result list
- *
- * @return  none
- */
-static void simpleBLEAddDeviceInfo( uint8 *pAddr, uint8 addrType )
-{
-  uint8 i;
-  
-  // If result count not at max
-  if ( simpleBLEScanRes < DEFAULT_MAX_SCAN_RES )
-  {
-    // Check if device is already in scan results
-    for ( i = 0; i < simpleBLEScanRes; i++ )
-    {
-      if ( osal_memcmp( pAddr, simpleBLEDevList[i].addr , B_ADDR_LEN ) )
-      {
-        return;
-      }
-    }
-    
-    // Add addr to scan result list
-    osal_memcpy( simpleBLEDevList[simpleBLEScanRes].addr, pAddr, B_ADDR_LEN );
-    simpleBLEDevList[simpleBLEScanRes].addrType = addrType;
-    
-    // Increment scan result count
-    simpleBLEScanRes++;
-  }
 }
 
 /*********************************************************************
@@ -1021,6 +885,31 @@ static void dataHandler( uint8 port, uint8 events )
     osal_start_timerEx(simpleBLETaskId, RX_TIME_OUT_EVT, 5);
   }
   return;
+}
+
+static void parseAdvData(gapDeviceInfoEvent_t *deviceInfo) {
+  uint8 *advertData = deviceInfo->pEvtData;
+  
+  // Is iBeacon?
+  if ( !((advertData[5] == 0x4c) &&
+      (advertData[6] == 0x00) &&
+      (advertData[7] == 0x02) &&
+      (advertData[8] == 0x15)) ) {
+      return;
+  }
+  
+  uint8 response[RESP_LEN] = "OK+SCAN:";
+  osal_memcpy(response + OFFSET_MAC, deviceInfo->addr, B_ADDR_LEN);
+  response[OFFSET_BATTERY] = 0xff;
+  osal_memcpy(response + OFFSET_UUID, advertData + 9, 21);
+  if (deviceInfo->dataLen == 31) {
+    response[OFFSET_BATTERY] = advertData[30];
+  }
+  response[OFFSET_RSSI] = deviceInfo->rssi;
+  response[OFFSET_END] = '\r';
+  response[OFFSET_END + 1] = '\n';
+  
+  NPI_WriteTransport(response, sizeof(response));
 }
 
 /*********************************************************************
